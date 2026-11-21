@@ -19,10 +19,12 @@ class SimulatedManager:
         self.events = []
     async def ensure(self): return self.protocol
     async def close(self): pass
-    async def stream(self, board, seconds, emit, *, multipv=1):
+    async def stream(self, board, seconds, emit, *, multipv=1, on_state=None):
         fen = board.fen()
         self.events.append(('start', fen))
         try:
+            if on_state:
+                await on_state("started")
             for depth in range(1, 6):
                 for index, move in enumerate(list(board.legal_moves)[:multipv], 1):
                     await emit({'score': chess.engine.PovScore(chess.engine.Cp(40 - 10 * index), board.turn),

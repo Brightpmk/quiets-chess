@@ -1,5 +1,6 @@
 import asyncio
 import time
+from threading import Event
 
 import chess
 import chess.engine
@@ -120,3 +121,63 @@ def test_review_validates_local_origin_and_supplies_terminal_without_search():
         result = wait_for(client, start, lambda job: job['status'] == 'complete')
         assert result['total'] == 0 and result['accuracy'] is None
         assert result['positions'][0]['terminal'] == 'stalemate'
+
+
+def test_cancelled_grade_cannot_publish_after_position_evaluation():
+    comparing = Event()
+
+    class InterruptedGrading(ReviewTestEngine):
+        async def review_search(self, board, nodes, multipv, roots, *, depth):
+            if multipv > 1 and not comparing.is_set():
+                comparing.set()
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    # Model a late result arriving during cleanup.
+                    pass
+            return await super().review_search(board, nodes, multipv, roots, depth=depth)
+
+    with TestClient(create_app(SETTINGS, InterruptedGrading())) as client:
+        first = submit(client, '1. e4 *')
+        assert comparing.wait(3)
+        active = client.get('/api/reviews/active').json()
+        assert active['id'] == first['id']
+        assert active['analyzed'] == 0 and active['position_count'] == 2
+        cancelled = client.delete(f"/api/reviews/{first['id']}").json()
+        assert cancelled['status'] == 'cancelled' and cancelled['accuracy'] is None
+        assert client.get('/api/reviews/active').json() is None
+        replacement = submit(client, '1. d4 *')
+        final = wait_for(client, replacement, lambda job: job['status'] == 'complete')
+        assert final['moves'][0]['uci'] == 'd2d4'
+        assert client.get(f"/api/reviews/{first['id']}").json() == cancelled
+
+
+def test_failed_grading_keeps_completed_positions_and_has_no_final_accuracy():
+    class FailingGrading(ReviewTestEngine):
+        async def review_search(self, board, nodes, multipv, roots, *, depth):
+            if multipv > 1:
+                raise RuntimeError("Comparison failed. Retry the review.")
+            return await super().review_search(board, nodes, multipv, roots, depth=depth)
+
+    with TestClient(create_app(SETTINGS, FailingGrading())) as client:
+        job = submit(client, '1. e4 *')
+        final = wait_for(client, job, lambda review: review['status'] == 'failed')
+        assert final['analyzed'] == 0 and final['position_count'] == 2 and final['accuracy'] is None
+        board = chess.Board()
+        for ply, position in enumerate(final['positions']):
+            assert (position['ply'], position['fen']) == (ply, board.fen(en_passant='fen'))
+            assert position['complete'] and position['score']['bound'] is None
+            if ply == 0:
+                board.push_san('e4')
+        assert client.get(f"/api/reviews/{job['id']}?position_after=3").status_code == 422
+
+
+def test_large_annotated_black_start_keeps_correct_move_and_result(review_games):
+    pgn = review_games['black_underpromotion'].replace('32...', '{' + ('note ' * 21_000) + '}\n32...')
+    with TestClient(create_app(SETTINGS, ReviewTestEngine())) as client:
+        job = submit(client, pgn)
+        final = wait_for(client, job, lambda review: review['status'] == 'complete')
+        assert final['moves'][0]['color'] == 'black'
+        assert final['positions'][0]['turn'] == 'black' and final['positions'][1]['turn'] == 'white'
+        assert final['positions'][1]['terminal'] == 'insufficient material'
+        assert final['accuracy']['white'] is None

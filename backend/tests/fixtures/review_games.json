@@ -1,0 +1,8 @@
+{
+  "opera": "[Event \"Opera Game\"]\n[White \"Paul Morphy\"]\n[Black \"Duke of Brunswick and Count Isouard\"]\n[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0",
+  "fools_mate": "[Event \"Example match\"]\n[White \"Ada\"]\n[Black \"Ben\"]\n[Result \"0-1\"]\n\n1. f3 e5 2. g4 Qh4# 0-1",
+  "black_underpromotion": "[SetUp \"1\"]\n[FEN \"7k/8/8/8/8/8/p7/7K b - - 0 32\"]\n\n32... a1=N 1/2-1/2",
+  "castling": "[SetUp \"1\"]\n[FEN \"r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1\"]\n\n1. O-O O-O-O *",
+  "en_passant": "[SetUp \"1\"]\n[FEN \"4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 31\"]\n\n31. exd6 *",
+  "fivefold": "1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 5. Nf3 Nf6 6. Ng1 Ng8 7. Nf3 Nf6 8. Ng1 Ng8 1/2-1/2"
+}

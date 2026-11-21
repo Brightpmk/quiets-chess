@@ -98,14 +98,20 @@ def create_app(settings=None, manager=None):
                 if runner.is_current(token):
                     await send({**base, **message})
 
+            async def state(name):
+                await publish({"type": name})
+
             async def emit(info, done):
                 nonlocal last_sent
                 lines = iterations.latest if done else iterations.feed(info)
                 now = time.monotonic()
                 if lines and (done or now - last_sent >= 0.08):
-                    last_sent = now
                     candidates = [{"rank": line["multipv"], **info_payload(board, line)} for line in lines]
-                    await publish({"type": "analysis", **candidates[0], "candidates": candidates, "done": done})
+                    if all(candidate["pv"] for candidate in candidates):
+                        last_sent = now
+                        await publish({"type": "analysis", **candidates[0], "candidates": candidates, "done": done})
+                    else:
+                        lines = ()
                 if done:
                     if not lines:
                         await publish({"type": "error", "code": "engine",
@@ -114,9 +120,9 @@ def create_app(settings=None, manager=None):
                     await publish({"type": "complete"})
 
             try:
-                await publish({"type": "started"})
                 outcome = board.outcome(claim_draw=False)
                 if outcome is not None:
+                    await state("started")
                     await publish({"type": "analysis", "done": True, "depth": 0, "nodes": 0,
                                    "nps": 0, "time": 0, "pv": [], "best_move": None,
                                    "candidates": [],
@@ -124,7 +130,7 @@ def create_app(settings=None, manager=None):
                                    "score": terminal_score(board, outcome)})
                     await publish({"type": "complete"})
                     return
-                await manager.stream(board, MODES[request.mode], emit, multipv=request.multipv)
+                await manager.stream(board, MODES[request.mode], emit, multipv=request.multipv, on_state=state)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

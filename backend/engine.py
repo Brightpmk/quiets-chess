@@ -7,6 +7,7 @@ from .settings import Settings
 from .search import Iterations, stream_search
 
 logger = logging.getLogger(__name__)
+REVIEW_SEARCH_TIMEOUT = 45
 
 
 def uci_position(board):
@@ -34,7 +35,9 @@ class EngineManager:
 
     async def ensure(self):
         if self.protocol is not None:
-            return self.protocol
+            if not self.protocol.returncode.done():
+                return self.protocol
+            self.abort()
         try:
             self.transport, protocol = await asyncio.wait_for(
                 chess.engine.popen_uci(self.settings.engine_path), 15)
@@ -70,11 +73,15 @@ class EngineManager:
                 await asyncio.wait_for(self.protocol.quit(), 3)
         self.abort()
 
-    async def _search(self, board, limit, emit, *, multipv, roots=None, game=None, timeout):
+    async def _search(self, board, limit, emit, *, multipv, roots=None, game=None, timeout, on_state=None):
+        if on_state and self.search_lock.locked():
+            await on_state("queued")
         async with self.search_lock:
             protocol = await self.ensure()
             try:
                 async with asyncio.timeout(timeout):
+                    if on_state:
+                        await on_state("started")
                     await stream_search(
                         protocol.analysis(uci_position(board), limit, multipv=multipv, root_moves=roots, game=game,
                                           info=chess.engine.INFO_ALL),
@@ -84,9 +91,9 @@ class EngineManager:
                 self.abort()
                 raise RuntimeError("Stockfish did not finish the search. Check the executable and retry.") from exc
 
-    async def stream(self, board, seconds, emit, *, multipv=1):
+    async def stream(self, board, seconds, emit, *, multipv=1, on_state=None):
         await self._search(board, chess.engine.Limit(time=seconds), emit,
-                           multipv=multipv, timeout=seconds + 5)
+                           multipv=multipv, timeout=seconds + 5, on_state=on_state)
 
     async def review_search(self, board, nodes, multipv, roots, *, depth=None):
         expected = min(multipv, len(roots) if roots else board.legal_moves.count())
@@ -98,5 +105,5 @@ class EngineManager:
 
         # A fresh UCI game clears hash and search history for reproducible bounded samples.
         await self._search(board, chess.engine.Limit(nodes=nodes, depth=depth), emit,
-                           multipv=multipv, roots=roots, game=object(), timeout=45)
+                           multipv=multipv, roots=roots, game=object(), timeout=REVIEW_SEARCH_TIMEOUT)
         return iterations.latest

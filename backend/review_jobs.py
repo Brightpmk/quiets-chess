@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .latest import LatestJob
 from .review import counts_for_moves
-from .review_pgn import MAX_PGN_BYTES, ReviewGame, parse_pgn
+from .review_pgn import ReviewGame, parse_pgn
 
 logger = logging.getLogger(__name__)
 ACTIVE = {"queued", "running"}
@@ -20,7 +20,7 @@ RETAINED_JOBS = 4
 
 class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    pgn: str = Field(max_length=MAX_PGN_BYTES)
+    pgn: str
     preset: Literal["quick", "deep"] = "quick"
     replace: str | None = Field(default=None, max_length=32)
 
@@ -45,11 +45,12 @@ class ReviewJob:
     def snapshot(self, after=0, position_after=0, include_game=True):
         return {"id": self.id, "status": self.status, "settings": self.settings,
                 "error": self.error, "game": {"root_fen": self.game.root_fen, "headers": self.game.headers,
-                                              "moves": self.game.moves, "terminal": self.game.terminal}
+                                              "moves": self.game.moves, "terminal": self.game.terminal,
+                                              "ending": self.game.ending}
                 if include_game else None,
                 "analyzed": len(self.moves), "total": len(self.game.moves), "moves": self.moves[after:],
-                "positions": [{"score": line["score"], "depth": line["depth"], "search": line["search"],
-                               "terminal": line.get("terminal")} for line in self.positions[position_after:]],
+                "positions": self.positions[position_after:], "position_count": len(self.positions),
+                "move_from": after, "position_from": position_after,
                 "classification_counts": counts_for_moves(self.moves),
                 "accuracy": self.accuracy if self.status == "complete" else None}
 
@@ -60,6 +61,7 @@ class ReviewJobs:
         self.jobs = OrderedDict()
         self.active = None
         self.runner = None
+        self.import_lock = asyncio.Lock()
 
     def open(self):
         self.runner = LatestJob(self.run)
@@ -69,13 +71,20 @@ class ReviewJobs:
             self.cancel(self.active)
         await self.runner.close()
 
-    def submit(self, request):
+    def check_replacement(self, request):
         if self.active and request.replace != self.active.id:
-            raise HTTPException(409, "A review is already running. Wait for it to finish or cancel it in its tab.")
-        try:
-            game = parse_pgn(request.pgn)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+            raise HTTPException(409, "A review is already running. Resume it here or cancel it before starting another.")
+
+    async def submit(self, request):
+        self.check_replacement(request)
+        if self.import_lock.locked():
+            raise HTTPException(409, "Another PGN is being imported. Try again when that import finishes.")
+        async with self.import_lock:
+            try:
+                game = await asyncio.to_thread(parse_pgn, request.pgn)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        self.check_replacement(request)
         if self.active:
             self.cancel(self.active)
         job = ReviewJob(game, request.preset, self.analyzer.metadata(request.preset))
@@ -102,6 +111,9 @@ class ReviewJobs:
         job.status = "running"
         try:
             await self.analyzer.run(job)
+            await job.checkpoint()
+            if len(job.moves) != len(job.game.moves) or len(job.positions) != len(job.moves) + 1:
+                raise RuntimeError("Review stopped before all positions and moves were evaluated. Retry the PGN.")
             if self.runner.is_current(token):
                 job.status = "complete"
         except asyncio.CancelledError:
@@ -129,23 +141,24 @@ def review_routes(jobs, allowed_origins):
         check_origin(request)
         if request.headers.get("content-type", "").split(";")[0].strip() != "application/json":
             raise HTTPException(415, "Send the review request as JSON.")
-        body = bytearray()
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > MAX_PGN_BYTES * 6 + 1024:
-                raise HTTPException(413, "Review import is limited to 100 KB.")
         try:
-            payload = ReviewRequest.model_validate_json(body)
+            payload = ReviewRequest.model_validate_json(await request.body())
         except ValidationError as exc:
-            raise HTTPException(422, "Invalid review request. Supply a PGN of at most 100 KB and select a preset.") from exc
-        return jobs.submit(payload).snapshot()
+            raise HTTPException(422, "Invalid review request. Supply a PGN and select a preset.") from exc
+        return (await jobs.submit(payload)).snapshot()
+
+    @router.get("/active")
+    async def active(request: Request):
+        check_origin(request)
+        return jobs.active.snapshot() if jobs.active else None
 
     @router.get("/{job_id}")
     async def status(job_id: str, request: Request, after: int | None = None, position_after: int = 0):
         check_origin(request)
-        if (after is not None and after < 0) or position_after < 0:
+        job = jobs.get(job_id)
+        if not 0 <= (after or 0) <= len(job.moves) or not 0 <= position_after <= len(job.positions):
             raise HTTPException(422, "Invalid review progress offset.")
-        return jobs.get(job_id).snapshot(after or 0, position_after, include_game=after is None)
+        return job.snapshot(after or 0, position_after, include_game=after is None)
 
     @router.delete("/{job_id}")
     async def cancel(job_id: str, request: Request):

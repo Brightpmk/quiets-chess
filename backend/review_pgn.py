@@ -4,9 +4,6 @@ import re
 
 import chess
 
-MAX_PGN_BYTES = 100_000
-MAX_PLIES = 600
-
 TOKEN = re.compile(
     r'(?P<space>\s+|;[^\n]*|(?m:^%[^\n]*)|\{[^}]*\})'
     r'|(?P<tag>\[(?P<name>[A-Za-z0-9_]+)\s+"(?P<value>(?:\\["\\]|[^"\\\r\n])*)"\s*\])'
@@ -23,6 +20,14 @@ class ReviewGame:
     headers: dict
     moves: list
     terminal: str | None
+
+    @property
+    def ending(self):
+        if self.terminal:
+            return {"kind": "position", "reason": self.terminal}
+        if self.headers["Result"] != "*":
+            return {"kind": "recorded", "reason": self.headers.get("Termination")}
+        return {"kind": "unfinished", "reason": None}
 
 
 def starting_board(headers):
@@ -43,9 +48,6 @@ def parse_pgn(text):
     text = text.lstrip("\ufeff").strip()
     if not text:
         raise ValueError("Paste a PGN or open a PGN file first.")
-    if len(text.encode("utf-8")) > MAX_PGN_BYTES:
-        raise ValueError("Review import is limited to 100 KB.")
-
     headers, moves = {}, []
     root_fen = result = board = None
     variations = offset = 0
@@ -67,7 +69,7 @@ def parse_pgn(text):
             raise ValueError("Unexpected text after the PGN result. Import one game at a time.")
         if board is None:
             board = starting_board(headers)
-            root_fen = board.fen()
+            root_fen = board.fen(en_passant="fen")
         if kind == "variation":
             variations += 1 if token[0] == "(" else -1
             if variations < 0:
@@ -87,8 +89,6 @@ def parse_pgn(text):
                 raise ValueError(f"Invalid move {token[0][:30]!r} at ply {len(moves) + 1}.") from exc
             moves.append({"uci": move.uci(), "san": board.san(move), "number": board.fullmove_number,
                           "color": "white" if board.turn else "black"})
-            if len(moves) > MAX_PLIES:
-                raise ValueError(f"Review supports up to {MAX_PLIES} plies per game.")
             board.push(move)
     if variations:
         raise ValueError("The PGN has an unclosed variation.")
@@ -96,7 +96,7 @@ def parse_pgn(text):
         raise ValueError("No PGN game was found.")
     if board is None:
         board = starting_board(headers)
-        root_fen = board.fen()
+        root_fen = board.fen(en_passant="fen")
     outcome = board.outcome(claim_draw=False)
     if "Result" in headers and headers["Result"] not in RESULTS:
         raise ValueError("The PGN Result tag is invalid.")

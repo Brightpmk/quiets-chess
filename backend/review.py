@@ -7,6 +7,7 @@ import chess.engine
 
 from .accuracy import VERSION, game_accuracy, move_accuracy, mover_win, white_win
 from .classification import LABELS, RULES, base_quality, sacrifice, special_quality
+from .engine import REVIEW_SEARCH_TIMEOUT
 from .protocol import info_payload, pv_payload, score_payload, terminal_score
 
 
@@ -37,24 +38,36 @@ class ReviewAnalyzer:
     def metadata(self, preset):
         return {"preset": preset, **asdict(PRESETS[preset]), "depth_limit": ANALYSIS_DEPTH,
                 "threads": self.settings.threads, "hash_mb": self.settings.hash_mb,
+                "search_timeout_seconds": REVIEW_SEARCH_TIMEOUT,
                 "engine": self.engine.name, "methodology": VERSION,
                 "classification": CLASSIFICATION_VERSION, "thresholds": asdict(RULES)}
 
     async def search(self, board, nodes, multipv=1, roots=None):
         root_names = tuple(move.uci() for move in roots) if roots else ()
         key = (self.engine.name, self.settings.threads, self.settings.hash_mb, VERSION,
-               CLASSIFICATION_VERSION, board.root().fen(), tuple(move.uci() for move in board.move_stack),
+               CLASSIFICATION_VERSION, board.root().fen(en_passant="fen"), tuple(move.uci() for move in board.move_stack),
                nodes, ANALYSIS_DEPTH, multipv, root_names)
         if key in self.cache:
             self.cache.move_to_end(key)
             return self.cache[key]
         raw = await self.engine.review_search(board, nodes, multipv, roots, depth=ANALYSIS_DEPTH)
-        if not raw:
+        expected = min(multipv, len(roots) if roots else board.legal_moves.count())
+        if not raw or len(raw) != expected:
             return ()
-        lines = tuple({**info_payload(board, line), "rank": line["multipv"],
-                       "search": {"nodes_limit": nodes, "depth_limit": ANALYSIS_DEPTH,
-                                  "multipv": multipv, "root_moves": root_names}}
-                      for line in raw)
+        lines = []
+        for rank, line in enumerate(raw, 1):
+            payload = info_payload(board, line)
+            if (not payload or not payload["best_move"] or payload["score"]["bound"] or
+                    line.get("multipv") != rank or payload["depth"] <= 0 or
+                    payload["depth"] != raw[0].get("depth")):
+                return ()
+            lines.append({**payload, "rank": rank, "source": "engine", "complete": True,
+                          "search": {"nodes_limit": nodes, "depth_limit": ANALYSIS_DEPTH,
+                                     "multipv": multipv, "root_moves": root_names}})
+        found = {line["best_move"] for line in lines}
+        if len(found) != expected or (roots and not found.issubset(root_names)):
+            return ()
+        lines = tuple(lines)
         key = (self.engine.name, *key[1:])
         self.cache[key] = lines
         if len(self.cache) > CACHE_SIZE:
@@ -65,13 +78,14 @@ class ReviewAnalyzer:
         outcome = board.outcome(claim_draw=False)
         if outcome:
             return {"score": terminal_score(board, outcome), "pv": [], "best_move": None, "depth": 0,
-                    "terminal": outcome.termination.name.lower().replace("_", " "), "search": None}
+                    "terminal": outcome.termination.name.lower().replace("_", " "), "search": None,
+                    "source": "rules", "complete": True, "nodes": None, "time": None}
         lines = await self.search(board, preset.position_nodes)
         if not lines:
             lines = await self.search(board, preset.verification_nodes)
         if not lines:
             raise RuntimeError("Stockfish did not return an exact evaluation for a game position. Retry the review.")
-        return lines[0]
+        return self.adjudicate(board, lines[0])
 
     @staticmethod
     def adjudicate(board, line):
@@ -85,7 +99,8 @@ class ReviewAnalyzer:
         value = chess.engine.Cp(0) if outcome.winner is None else chess.engine.Mate(1)
         score = score_payload(chess.engine.PovScore(value, board.turn), board.turn)
         return {**line, "score": score, "pv": pv_payload(board, [move]),
-                "terminal": outcome.termination.name.lower().replace("_", " ")}
+                "source": "rules", "engine_score": line.get("engine_score", line["score"]),
+                "forced_outcome": outcome.termination.name.lower().replace("_", " ")}
 
     async def compare(self, board, best, played, after, color, preset, *, required=True):
         roots = (chess.Move.from_uci(best["best_move"]), chess.Move.from_uci(played))
@@ -132,7 +147,6 @@ class ReviewAnalyzer:
         color, played = move["color"], move["uci"]
         forced = board.legal_moves.count() == 1
         engine_best = forced or played == best["best_move"]
-        best = self.adjudicate(board, best)
         chosen, alternative, special, evidence = best, None, None, ()
         if not engine_best:
             alternative, chosen = await self.compare(board, best, played, after, color, preset)
@@ -157,6 +171,12 @@ class ReviewAnalyzer:
         before_win = mover_win(recommendation["score"], color)
         loss = before_win - after_win
         base = base_quality(loss, engine_best=engine_best)
+        comparison = None
+        if not engine_best:
+            adjacent_loss = mover_win(best["score"], color) - mover_win(after["score"], color)
+            paired_loss = mover_win(alternative["score"], color) - after_win
+            comparison = {"paired_loss": paired_loss, "adjacent_loss": adjacent_loss,
+                          "disagreement": abs(paired_loss - adjacent_loss) >= 4}
         if special:
             label, explanation = special
         elif forced:
@@ -172,28 +192,30 @@ class ReviewAnalyzer:
                 "forced": forced, "accuracy": move_accuracy(before_win, after_win), "win_loss": loss,
                 "accuracy_inputs": {"before": before_win, "after": after_win},
                 "played_line": chosen, "best_alternative": alternative,
-                "recommendation": recommendation, "verification": evidence}
+                "recommendation": recommendation, "verification": evidence, "comparison": comparison}
 
     async def run(self, job):
         board = chess.Board(job.game.root_fen)
         preset = PRESETS[job.preset]
-        if job.game.moves or job.game.terminal:
-            # Terminal starts need no engine. PGNs with moves need a verified engine identity.
-            if job.game.moves:
-                # The initial position search initializes the engine under the shared UCI lock.
-                job.positions.append(await self.position(board, preset))
-                job.settings = self.metadata(job.preset)
-            else:
-                job.positions.append(await self.position(board, preset))
-        for index, move in enumerate(job.game.moves):
+
+        async def evaluate(position, ply):
             await job.checkpoint()
+            result = await self.position(position, preset)
+            await job.checkpoint()
+            job.settings = self.metadata(job.preset)
+            job.positions.append({**result, "ply": ply, "fen": position.fen(en_passant="fen"),
+                                  "turn": "white" if position.turn else "black"})
+            return result
+
+        before = await evaluate(board, 0)
+        for index, move in enumerate(job.game.moves):
             child = board.copy()
             child.push_uci(move["uci"])
-            after = await self.position(child, preset)
-            grade = await self.grade(board, move, job.positions[-1], after, preset)
-            job.positions.append(after)
+            after = await evaluate(child, index + 1)
+            grade = await self.grade(board, move, before, after, preset)
+            await job.checkpoint()
             job.moves.append({"ply": index + 1, **grade})
-            board = child
+            board, before = child, after
         if job.moves:
             job.accuracy = game_accuracy([white_win(position["score"]) for position in job.positions],
                                          [(move["color"], move["accuracy"]) for move in job.moves])

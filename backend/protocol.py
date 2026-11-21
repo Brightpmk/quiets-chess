@@ -95,10 +95,10 @@ def terminal_score(board, outcome):
 
 
 def pv_payload(board, moves):
-    copy = board.copy(stack=False)
+    copy = board.copy()
     result = []
     for move in moves:
-        if move not in copy.legal_moves:
+        if move not in copy.legal_moves or copy.is_seventyfive_moves() or copy.is_fivefold_repetition() or copy.is_insufficient_material():
             break
         result.append({"uci": move.uci(), "san": copy.san(move),
                        "number": copy.fullmove_number, "color": "white" if copy.turn else "black"})

@@ -111,3 +111,15 @@ async def test_native_search_handles_large_custom_fullmove_number():
         assert board.fen() == before and len(board.move_stack) == 1
     finally:
         await manager.close()
+
+
+async def test_native_engine_is_restarted_after_it_exits_while_idle():
+    manager = EngineManager(Settings.from_env())
+    try:
+        previous = await manager.ensure()
+        await asyncio.wait_for(previous.quit(), 5)
+        lines = await manager.review_search(chess.Board(), 40_000, 1, None)
+        assert manager.protocol is not previous
+        assert len(lines) == 1 and lines[0]['pv'][0] in chess.Board().legal_moves
+    finally:
+        await manager.close()

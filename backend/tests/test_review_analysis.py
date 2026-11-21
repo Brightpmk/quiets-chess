@@ -1,12 +1,17 @@
+import asyncio
+from collections import Counter
+from random import Random
 from types import SimpleNamespace
 
 import chess
 import chess.engine
+import chess.pgn
 import pytest
 
 from backend.accuracy import game_accuracy, move_accuracy, mover_win, white_win
 from backend.classification import ClassificationRules, base_quality, sacrifice, special_quality
-from backend.protocol import info_payload, score_payload, terminal_score
+from backend.engine import EngineManager
+from backend.protocol import info_payload, pv_payload, score_payload, terminal_score
 from backend.review import PRESETS, ReviewAnalyzer
 from backend.review_pgn import parse_pgn
 from backend.search import Iterations
@@ -154,6 +159,8 @@ async def test_same_depth_same_root_comparison_rechecks_disagreeing_black_scores
     assert grade["best_alternative"]["best_move"] == "e7e5"
     assert grade["played_line"]["depth"] == grade["best_alternative"]["depth"] == 18
     assert grade["played_line"]["search"]["nodes_limit"] == preset.verification_nodes
+    assert grade["comparison"]["paired_loss"] < 0 < grade["comparison"]["adjacent_loss"]
+    assert grade["comparison"]["disagreement"]
 
 
 async def test_review_cache_keys_include_history_and_search_budget():
@@ -202,3 +209,111 @@ async def test_main_choice_only_loses_credit_after_a_clear_deeper_reversal():
     assert grade["classification"] == "Mistake"
     assert grade["recommendation"]["best_move"] == "d2d4"
     assert grade["played_line"]["depth"] == grade["best_alternative"]["depth"] == 18
+
+
+def test_shared_fixture_moves_round_trip_and_recorded_endings_stay_playable(review_games):
+    for name, pgn in review_games.items():
+        game = parse_pgn(pgn)
+        board = chess.Board(game.root_fen)
+        for move in game.moves:
+            played = board.parse_uci(move["uci"])
+            assert move == {"uci": played.uci(), "san": board.san(played), "number": board.fullmove_number,
+                            "color": "white" if board.turn else "black"}, name
+            board.push(played)
+        assert bool(board.outcome()) == (game.ending["kind"] == "position"), name
+    black = parse_pgn(review_games["black_underpromotion"])
+    assert black.moves == [{"uci": "a2a1n", "san": "a1=N", "number": 32, "color": "black"}]
+    for result, reason in [("0-1", "Resignation"), ("1/2-1/2", "Draw agreement")]:
+        game = parse_pgn(f'[Termination "{reason}"]\n\n1. e4 {result}')
+        assert game.ending == {"kind": "recorded", "reason": reason}
+        assert game.headers["Result"] == result and game.terminal is None
+    uncapturable = parse_pgn('[FEN "4k3/8/8/3p4/8/8/8/R3K3 w - d6 0 31"]\n\n31. Ra2 *')
+    assert uncapturable.root_fen.split()[3] == "d6"
+
+
+def test_pv_stops_at_draw_using_the_game_history(review_games):
+    game = parse_pgn(review_games["fivefold"])
+    board = chess.Board(game.root_fen)
+    for move in game.moves[:-1]:
+        board.push_uci(move["uci"])
+    continuation = [chess.Move.from_uci(uci) for uci in ("f6g8", "e2e4")]
+    assert [move["uci"] for move in pv_payload(board, continuation)] == ["f6g8"]
+    assert len(board.move_stack) == 15
+
+
+def test_import_accepts_a_legal_mainline_beyond_the_old_move_limit():
+    board = chess.Board("7k/8/8/8/8/8/1PP5/K7 w - - 0 1")
+    random = Random(17)
+    visits = Counter({(board.board_fen(), board.turn): 1})
+    for _ in range(604):
+        pawn_move = board.turn == chess.WHITE and board.halfmove_clock >= 100
+        piece = chess.PAWN if pawn_move else chess.KING
+        options = [move for move in board.legal_moves if board.piece_type_at(move.from_square) == piece
+                   and not move.promotion and not board.is_capture(move)
+                   and (pawn_move or (chess.square_file(move.to_square) < 4) == board.turn)]
+        random.shuffle(options)
+        for move in options:
+            board.push(move)
+            key = (board.board_fen(), board.turn)
+            if visits[key] < 3:
+                visits[key] += 1
+                break
+            board.pop()
+        else:
+            pytest.fail("Synthetic game could not continue without an automatic outcome")
+    game = parse_pgn(str(chess.pgn.Game.from_board(board)))
+    assert [move["uci"] for move in game.moves] == [move.uci() for move in board.move_stack]
+
+
+async def test_position_retries_bad_engine_sample_and_keeps_exact_provenance():
+    board = chess.Board()
+    attempts = []
+
+    async def search(original, nodes, multipv, roots, *, depth):
+        attempts.append(nodes)
+        try_number = len(attempts)
+        line = {**sample(board, 30, 'e4 e5'), "nodes": 5000, "time": 0.015}
+        if try_number == 1:
+            return ({**line, "upperbound": True},)
+        return (line,)
+
+    analyzer = ReviewAnalyzer(SimpleNamespace(name='Test', review_search=search),
+                              Settings('unused', 1, 16, frozenset()))
+    result = await analyzer.position(board, PRESETS["quick"])
+    assert attempts == [45_000, 300_000]
+    assert result["source"] == "engine" and result["complete"] and result["score"]["bound"] is None
+    assert result["nodes"] == 5000 and result["time"] == 0.015
+    assert result["search"]["nodes_limit"] == 300_000
+
+
+async def test_rejects_an_exact_sample_with_an_illegal_root_move():
+    board = chess.Board()
+
+    async def search(*args, **kwargs):
+        return ({**sample(board, 240, 'e4'), "pv": [chess.Move.from_uci('e2e5')]},)
+
+    analyzer = ReviewAnalyzer(SimpleNamespace(name='Test', review_search=search),
+                              Settings('unused', 1, 16, frozenset()))
+    with pytest.raises(RuntimeError, match="exact evaluation"):
+        await analyzer.position(board, PRESETS["quick"])
+
+
+async def test_board_search_can_be_cancelled_while_queued_behind_review():
+    manager = EngineManager(Settings('unused', 1, 16, frozenset()))
+    queued = asyncio.Event()
+    states = []
+
+    async def state(name):
+        states.append(name)
+        queued.set()
+
+    async def emit(*args):
+        pytest.fail("A queued search should emit no evaluation")
+
+    async with manager.search_lock:
+        request = asyncio.create_task(manager.stream(chess.Board(), 1, emit, on_state=state))
+        await asyncio.wait_for(queued.wait(), 1)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert states == ["queued"] and manager.protocol is None and manager.search_lock.locked()
