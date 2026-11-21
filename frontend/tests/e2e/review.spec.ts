@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
-const SHORT_PGN = '[Event "Example match"]\n[White "Ada"]\n[Black "Ben"]\n[Result "0-1"]\n\n1. f3 e5 2. g4 Qh4# 0-1';
-const LONG_PGN = '[White "Paul Morphy"]\n\n1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0';
+const games = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/review_games.json', import.meta.url), 'utf8'));
+const SHORT_PGN: string = games.fools_mate;
+const LONG_PGN: string = games.opera;
 
 test('native candidate controls switch count and arrows, including a forced reply', async ({page}) => {
   test.skip(process.env.RUN_STOCKFISH_TESTS !== '1', 'Requires running backend with Stockfish 19');
@@ -137,4 +139,25 @@ test('cancels live review, reports invalid PGN, and replaces provisional results
   await expect(page.getByText('Complete', {exact: true})).toBeVisible({timeout: 20000});
   await expect(summary).toContainText('Ada');
   await expect(summary).not.toContainText('Paul Morphy');
+});
+
+test('completes a native review of the Opera Game and exports each position with provenance', async ({page}) => {
+  test.skip(process.env.RUN_STOCKFISH_TESTS !== '1', 'Requires running backend with Stockfish 19');
+  await page.goto('/');
+  await page.getByRole('button', {name: 'Game Review', exact: true}).click();
+  await page.getByRole('textbox', {name: 'Game PGN', exact: true}).fill(LONG_PGN);
+  await page.getByRole('button', {name: 'Run review', exact: true}).click();
+  await expect(page.getByText('Complete', {exact: true})).toBeVisible({timeout: 20000});
+  await expect(page.getByText('34 / 34 positions evaluated.', {exact: true})).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', {name: 'Export JSON'}).click();
+  const result = JSON.parse(await readFile(await (await download).path(), 'utf8'));
+  expect(result.settings.engine).toContain('Stockfish 19');
+  expect(result.moves).toHaveLength(33);
+  expect(result.positions).toHaveLength(34);
+  expect(result.positions[1]).toMatchObject({ply: 1, turn: 'black', complete: true, search: {multipv: 1}});
+  expect(result.positions[1].nodes).toBeGreaterThan(0);
+  expect(result.positions[1].time).toBeGreaterThanOrEqual(0);
+  expect(result.positions[33]).toMatchObject({ply: 33, turn: 'black', terminal: 'checkmate',
+    source: 'rules', score: {mate: 0, winner: 'white', cp: null, bound: null}});
 });

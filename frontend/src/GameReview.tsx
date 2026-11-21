@@ -65,6 +65,9 @@ function SelectedMove({move, grade}: {move?: Review['game']['moves'][number]; gr
     {move && !grade && <p className="review-note">This move has not been analyzed yet.</p>}
     {grade && <>
       <p className="review-explanation">{grade.explanation}</p>
+      {grade.comparison?.disagreement && <p className="review-note">
+        The paired search and the position evaluations disagree. The move grade uses the paired search.
+      </p>}
       <dl className="review-move-details">
         <div><dt>Played move</dt><dd>{move?.san} <span>{scoreLabel(grade.played_line.score)} · depth {grade.played_line.depth}</span></dd></div>
         <div><dt>Move accuracy</dt><dd>{grade.accuracy.toFixed(1)}%</dd></div>
@@ -89,10 +92,10 @@ export function GameReview({visible, onOpenPosition}: {visible: boolean; onOpenP
   const fileInput = useRef<HTMLInputElement>(null);
   const fileRead = useRef(0);
   const game = job?.game;
+  const evaluated = job?.positions[cursor];
   const line = useMemo(() => game && ({root: game.root_fen, moves: game.moves.map(move => move.uci),
     cursor, headers: game.headers}), [game, cursor]);
-  const fen = useMemo(() => line && gameAt(line).fen(), [line]);
-  const evaluated = job?.positions[cursor];
+  const fen = useMemo(() => evaluated?.fen ?? (line && gameAt(line).fen()), [line, evaluated?.fen]);
   const selected = game?.moves[cursor - 1];
   const squareStyles: Record<string, CSSProperties> = {};
   if (selected) for (const square of [selected.uci.slice(0, 2), selected.uci.slice(2, 4)])
@@ -118,14 +121,13 @@ export function GameReview({visible, onOpenPosition}: {visible: boolean; onOpenP
         <div className="review-card-heading"><label htmlFor="review-pgn">Game PGN</label>
           <button className="text-button" type="button" onClick={() => fileInput.current?.click()}>Open PGN file</button></div>
         <textarea id="review-pgn" placeholder={'[White "Player 1"]\n[Black "Player 2"]\n\n1. e4 e5 2. Nf3 …'}
-          value={pgn} onChange={event => { fileRead.current++; changePgn(event.target.value); }} spellCheck={false} maxLength={100_001}/>
+          value={pgn} onChange={event => { fileRead.current++; changePgn(event.target.value); }} spellCheck={false}/>
         <input className="sr-only" type="file" ref={fileInput} accept=".pgn,.txt" tabIndex={-1} aria-label="Choose a game PGN file"
           onChange={async event => {
             const file = event.target.files?.[0];
             event.target.value = '';
             if (!file) return;
             const read = ++fileRead.current;
-            if (file.size > 100_000) { setFileError('Review import is limited to 100 KB.'); return; }
             try {
               const text = await file.text();
               if (read === fileRead.current) changePgn(text);
@@ -143,17 +145,22 @@ export function GameReview({visible, onOpenPosition}: {visible: boolean; onOpenP
             {review.action === 'starting' ? 'Submitting PGN…' : active ? 'Replace review' : 'Run review'}</button>
           {active && <button className="button secondary" type="button" disabled={!!review.action}
             onClick={review.cancel}>{review.action === 'cancelling' ? 'Cancelling…' : 'Cancel review'}</button>}
-          {job && ['failed', 'cancelled'].includes(job.status) && <button className="button secondary" type="button"
+          {job && review.canRetry && ['failed', 'cancelled'].includes(job.status) && <button className="button secondary" type="button"
             disabled={!!review.action} onClick={async () => { if (await review.retry()) setCursor(0); }}>Retry previous review</button>}
         </div>
-        <p className="review-note">{preset === 'quick' ? 'Quick review uses smaller per-position search budgets.' : 'Deeper review searches more nodes and may take several minutes.'} Standard chess · up to 600 plies.</p>
+        <p className="review-note">{preset === 'quick' ? 'Quick review uses smaller per-position search budgets.' : 'Deeper review searches more nodes and may take several minutes.'} Import one standard-chess game at a time.</p>
         {(fileError || review.error) && <p className="review-error" role="alert">{fileError || review.error}</p>}
         {job && <div className="review-progress" role="status">
           <div><strong>{status[job.status]}</strong><span>{job.analyzed} / {job.total} plies · {job.settings.preset === 'quick' ? 'Quick' : 'Deeper'} review</span></div>
           <progress aria-label="Review progress" max={Math.max(1, job.total)} value={job.total || job.status !== 'complete' ? job.analyzed : 1}/>
+          <p className="review-note">{job.position_count} / {job.total + 1} positions evaluated. {active && job.position_count > job.analyzed + 1 && 'Comparing the next move.'}</p>
           <p className="review-note">{job.settings.engine ?? 'Stockfish'} · {job.settings.position_nodes.toLocaleString()} nodes per main search</p>
-          {job.status !== 'complete' && <p className="review-note">{job.analyzed > 0 ? 'Partial results · whole-game accuracy is pending.' : 'Whole-game accuracy appears after all moves are analyzed.'}</p>}
-          {job.game.terminal && job.status === 'complete' && <p className="review-note">Final position · {job.game.terminal}</p>}
+          {job.status !== 'complete' && <p className="review-note">{job.position_count > 0 ? 'Partial results · whole-game accuracy is pending.' : 'Whole-game accuracy appears after all moves are analyzed.'}</p>}
+          {active && <p className="review-note">Board analysis pauses on this tab. Analysis Board requests can wait for the current review search.</p>}
+          {job.game.ending.kind === 'position' && job.status === 'complete' && <p className="review-note">Final position · {job.game.ending.reason}</p>}
+          {job.game.ending.kind === 'recorded' && <p className="review-note">
+            Recorded PGN result{job.game.ending.reason ? ` · ${job.game.ending.reason}` : ''}. The final board position remains playable.
+          </p>}
         </div>}
         {review.connectionError && <p className="review-error" role="status">{review.connectionError}</p>}
         {job?.error && <p className="review-error" role="alert">{job.error}</p>}

@@ -13,6 +13,7 @@ export function useAnalysis(position: PositionRequest, enabled: boolean, suspend
   const [connection, setConnection] = useState<Connection>('connecting');
   const [result, setResult] = useState<(Analysis & { key: string }) | null>(null);
   const [running, setRunning] = useState(false);
+  const [queued, setQueued] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [reconnect, setReconnect] = useState(0);
@@ -25,6 +26,7 @@ export function useAnalysis(position: PositionRequest, enabled: boolean, suspend
   const markRunning = useCallback((value: boolean) => {
     searchRunning.current = value;
     setRunning(value);
+    if (!value) setQueued(false);
   }, []);
 
   const launch = useCallback(() => {
@@ -99,6 +101,8 @@ export function useAnalysis(position: PositionRequest, enabled: boolean, suspend
         const expected = desired.current;
         if (!acceptsResult(id, expected.fen, message)) return;
         if (message.multipv !== undefined && message.multipv !== expected.multipv) return;
+        if (message.type === 'queued') setQueued(true);
+        if (message.type === 'started') setQueued(false);
         if (message.type === 'analysis' && acceptsAnalysis(id, expected.fen, expected.multipv, expected.legalMoves, message)) {
           setResult(previous => {
             if (activeId.current !== id || desired.current.key !== expected.key) return previous;
@@ -131,7 +135,7 @@ export function useAnalysis(position: PositionRequest, enabled: boolean, suspend
   }, [reconnect, launch, markRunning]);
 
   return {
-    connection, info, error, running,
+    connection, info, error, running, queued,
     result: enabled && result?.key === position.key ? result : null,
     invalidate,
     stop: () => { paused.current = true; halt(); },

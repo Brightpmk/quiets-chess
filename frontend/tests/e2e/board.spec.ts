@@ -49,7 +49,11 @@ test('PGN import/export and invalid FEN feedback', async ({page}) => {
 
 test('promotion lets the user choose a knight', async ({page}) => {
   await page.goto('/'); await loadFen(page, '7k/P7/8/8/8/8/8/7K w - - 0 1');
-  await (await square(page, 'a7')).click(); await (await square(page, 'a8')).click();
+  const source = await square(page, 'a7');
+  const target = await square(page, 'a8');
+  await expect(target.locator('[data-piece]')).toHaveCount(0);
+  await source.locator('[data-piece="wP"]').click();
+  await target.click();
   await page.getByRole('button', {name: 'Promote to Knight'}).click();
   await expect(page.getByTestId('move-list')).toContainText('a8=N');
 });

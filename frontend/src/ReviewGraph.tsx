@@ -11,7 +11,7 @@ const BOTTOM = 126;
 export function ReviewGraph({positions, total, selected, onSelect}: {
   positions: Position[]; total: number; selected: number; onSelect: (ply: number) => void;
 }) {
-  const limit = Math.min(10, Math.max(2, ...positions.map(({score}) => Math.ceil(Math.abs(score.cp ?? 0) / 100))));
+  const limit = Math.min(10, positions.reduce((max, {score}) => Math.max(max, Math.ceil(Math.abs(score.cp ?? 0) / 100)), 2));
   const x = (ply: number) => LEFT + (RIGHT - LEFT) * ply / Math.max(1, total);
   const y = (pawns: number) => TOP + (BOTTOM - TOP) * (limit - pawns) / (2 * limit);
   const points = positions.map(({score}, ply) => ({
@@ -20,6 +20,7 @@ export function ReviewGraph({positions, total, selected, onSelect}: {
       : Math.max(-limit, Math.min(limit, (score.cp ?? 0) / 100))),
   }));
   const selectedPoint = points[selected];
+  const sample = positions[selected];
   return <section className="panel review-card review-graph" aria-label="Evaluation graph">
     <div className="review-card-heading"><h2>Evaluation graph</h2><span>White perspective · pawns</span></div>
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} aria-hidden="true" data-testid="evaluation-graph"
@@ -51,6 +52,8 @@ export function ReviewGraph({positions, total, selected, onSelect}: {
         disabled={positions.length < 2} onChange={event => onSelect(Number(event.target.value))}/>
       <output>{selectedPoint ? `Ply ${selected} · ${scoreLabel(positions[selected].score)}` : 'Awaiting evaluation'}</output>
     </div>
+    {sample && <p className="review-note">{sample.terminal ? `Terminal position · ${sample.terminal}`
+      : `Depth ${sample.depth} · ${sample.nodes?.toLocaleString() ?? '—'} nodes · ${sample.time?.toFixed(2) ?? '—'} s`}</p>}
     <p className="review-note">Mate scores appear at the edges. The graph clips evaluations beyond ±10 pawns.</p>
   </section>;
 }

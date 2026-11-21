@@ -143,7 +143,7 @@ export default function App() {
     };
   }
   const rows = Array.from(new Set(history.map(m => m.number))).map(number => ({number, moves: history.filter(m => m.number === number)}));
-  const engineState = engine.connection === 'connected' ? engine.error ? 'Needs attention' : engine.running ? 'Analyzing' : 'Connected'
+  const engineState = engine.connection === 'connected' ? engine.error ? 'Needs attention' : engine.queued ? 'Waiting for engine' : engine.running ? 'Analyzing' : 'Connected'
     : engine.connection === 'busy' ? 'Engine in use' : engine.connection === 'connecting' ? 'Connecting' : 'Offline';
 
   return <div className="app-shell">

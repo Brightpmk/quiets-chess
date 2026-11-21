@@ -78,10 +78,13 @@ rules and cannot establish the full move history.
 ## Game Review
 
 1. Open **Game Review**. Paste a PGN or click **Open PGN file**. Import one
-   standard-chess game at a time, up to 100 KB and 600 plies. Review follows the
-   mainline and preserves any starting FEN, player names, result and PGN tags.
+   standard-chess game at a time. Game Review has no fixed file-size or move
+   limit. Review follows the mainline and preserves the starting FEN, player
+   names, result and PGN tags. A recorded result, such as a resignation or
+   agreement, is shown separately from an automatic board outcome.
 2. Choose **Quick review** or **Deeper review** and click **Run review**.
-   **Cancel review** keeps the finished plies. **Replace review** starts another
+   **Cancel review** keeps the evaluated positions and finished grades. The
+   progress display counts them separately. **Replace review** starts another
    job. **Retry previous review** resubmits the last PGN and preset and can
    reuse successful searches.
 3. Select a move in the list or a point on the graph. The graph shows
@@ -90,9 +93,12 @@ rules and cannot establish the full move history.
    continuation. **Analyze position** opens that ply and its history in the
    Analysis Board. Switching workflows directly keeps the board you were using.
 4. **Export JSON** saves the status, PGN metadata, position evaluations, grades,
-   search provenance, engine settings and methodology versions. Cancelled and
+   search provenance, engine settings and methodology versions. Each position
+   records its ply, FEN, side to move and exact White-relative score. The
+   recorded depth, nodes and elapsed time identify the search sample. Cancelled and
    failed exports retain partial results. Whole-game accuracy appears only
-   after all plies have been assessed.
+   after all plies have been assessed. Grades use mover-relative comparisons,
+   and a material disagreement with adjacent position scores is flagged.
 
 | Preset | Main search | Alternative | Same-root comparison | Verification |
 | --- | ---: | ---: | ---: | ---: |
@@ -192,7 +198,8 @@ move numbers and game history remain available in the board and export.
 The engine manager grants one search at a time across both workflows. A single
 review job can run, with one latest replacement allowed to wait for cleanup.
 Other review submissions receive a busy response. An interactive search can
-take its turn between review searches. Opening Game Review suspends the
+take its turn between review searches. The board shows **Waiting for engine**
+when another search holds the engine. Opening Game Review suspends the
 current Analysis Board search. One browser tab at a time owns the live
 analysis socket.
 
@@ -207,7 +214,8 @@ The server retains the last four jobs and a 512-entry in-memory search cache.
 Keys include starting FEN, played UCI history, engine identity, resource
 settings, limits, MultiPV, constrained roots and methodology versions.
 Individual review searches use fresh UCI game state. Only exact completed
-iterations are cached. Export review results before refreshing or shutting down.
+iterations are cached. A reload reconnects to a running review. Export
+completed results before refreshing or shutting down.
 
 ## Verification
 

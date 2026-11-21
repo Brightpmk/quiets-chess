@@ -22,3 +22,19 @@ were `RUN_STOCKFISH_TESTS=1` and `QUIET_CHESS_TEST_URL=http://127.0.0.1:8001`.
 
 Linux, macOS, Firefox, Safari and the 600-ply maximum were outside this
 verification run. Vite’s built application was tested through FastAPI.
+
+## Phase 1 review reliability
+
+Verified on 2026-11-22 on Windows with Chromium and native Stockfish 19.
+
+| Check | Result |
+| --- | --- |
+| `python manage.py test --engine` | 74 backend tests (5 native), 27 frontend tests, and production build passed |
+| Focused backend rerun | 25 tests passed after the final engine-state and import test changes, including a legal 604-ply import |
+| Final frontend rerun | 27 unit tests and production build passed |
+| Live Playwright suite | 11 passed, including a complete 33-ply Opera Game review and an export with 34 position records |
+| Direct native API check | A custom Black-to-move game completed with legal castling and a recorded resignation. The final board remained playable. |
+
+The large annotated PGN and 604-ply mainline exercises validate import. The
+33-ply game was the end-to-end native browser test. Browser and platform
+coverage was Windows Chromium. The local test server ran on port 8001.
