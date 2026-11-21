@@ -36,6 +36,7 @@
 .candidate-controls {justify-content: space-between; flex-wrap: wrap;}
 .candidate-controls label, .review-actions label {color: #b7c4af; font-size: 12px;}
 .candidate-controls .arrow-toggle {margin: 0;}
+.board-arrow-toggle {margin: 8px 0 0 27px; min-height: 32px; width: fit-content; font-size: 12px;}
 .candidate-controls select, .review-actions select {
   min-height: 32px;
   padding: 4px 8px;

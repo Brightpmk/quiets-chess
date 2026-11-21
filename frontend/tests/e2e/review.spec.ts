@@ -19,10 +19,10 @@ test('native candidate controls switch count and arrows, including a forced repl
     const best = document.querySelector('.candidate-item .candidate-score')?.textContent;
     return !!best && headline === best;
   })).toBe(true);
-  await page.getByLabel('Show arrows').uncheck();
+  await page.getByLabel('Show best-move arrows').uncheck();
   await expect(arrows).toHaveCount(0);
   await expect(rows).toHaveCount(3);
-  await page.getByLabel('Show arrows').check();
+  await page.getByLabel('Show best-move arrows').check();
   await count.selectOption('1');
   await expect(rows).toHaveCount(1);
   await count.selectOption('3');
@@ -31,6 +31,39 @@ test('native candidate controls switch count and arrows, including a forced repl
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('Kxg7');
   await expect(arrows).toHaveCount(1);
+});
+
+test('hides streaming arrows without restarting analysis and remembers the choice', async ({page}) => {
+  test.skip(process.env.RUN_STOCKFISH_TESTS !== '1', 'Requires running backend with Stockfish 19');
+  await page.setViewportSize({width: 375, height: 812});
+  const requests: string[] = [];
+  page.on('websocket', ws => ws.on('framesent', ({payload}) => {
+    const packet = JSON.parse(payload.toString());
+    if (packet.type === 'analyze') requests.push(packet.request_id);
+  }));
+  const connecting = page.waitForEvent('websocket');
+  await page.goto('/');
+  const ws = await connecting;
+  await page.getByRole('button', {name: 'Deep 10 seconds'}).click();
+  const arrows = page.getByTestId('chessboard').locator('path[marker-end]');
+  const toggle = page.getByRole('checkbox', {name: 'Show best-move arrows'});
+  await expect(arrows).toHaveCount(1);
+  const active = requests.at(-1);
+  await toggle.uncheck();
+  await expect(arrows).toHaveCount(0);
+  await ws.waitForEvent('framereceived', {predicate: ({payload}) => {
+    const packet = JSON.parse(payload.toString());
+    return packet.type === 'analysis' && packet.request_id === active && !packet.done;
+  }});
+  expect(requests.at(-1)).toBe(active);
+  await expect(page.getByTestId('principal-variation')).toBeVisible();
+  await expect(page.getByTestId('evaluation')).not.toHaveText('—');
+  await page.getByTestId('chessboard').locator('[data-square="e2"]').click();
+  await page.getByTestId('chessboard').locator('[data-square="e4"]').click();
+  await expect(page.getByTestId('principal-variation')).toBeVisible();
+  await expect(arrows).toHaveCount(0);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
 });
 
 test('imports a PGN file, reviews it, navigates with the graph, and exports JSON on mobile', async ({page}) => {

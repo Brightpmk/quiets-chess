@@ -11,6 +11,8 @@ import { candidateArrows, candidateColors } from './candidates.ts';
 import { boardAppearance, download, Variation } from './chessDisplay.tsx';
 import { GameReview } from './GameReview.tsx';
 
+const arrowPreference = 'quiet-chess.show-best-move-arrows';
+
 function Icon({name, size = 18}: {name: string; size?: number}) {
   const paths: Record<string, ReactNode> = {
     flip: <><path d="M4 7h15l-4-4M20 17H5l4 4"/><path d="M4 7v5m16 5v-5"/></>,
@@ -38,7 +40,10 @@ export default function App() {
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState('');
   const [notice, setNotice] = useState('');
-  const [arrows, setArrows] = useState(true);
+  const [arrows, setArrows] = useState(() => {
+    try { return localStorage.getItem(arrowPreference) !== 'false'; }
+    catch { return true; }
+  });
   const [confirmNew, setConfirmNew] = useState(false);
   const promotionDialog = useRef<HTMLDialogElement>(null);
   const resetDialog = useRef<HTMLDialogElement>(null);
@@ -179,6 +184,14 @@ export default function App() {
             <button className="button ghost" title="Flip board (F)" onClick={() => setOrientation(value => value === 'white' ? 'black' : 'white')}><Icon name="flip"/>Flip board</button>
             <div className="navigation"><button className="icon-button" aria-label="First position" title="First position (Home)" disabled={!line.cursor} onClick={() => navigate(0)}><Icon name="first"/></button><button className="icon-button" aria-label="Undo move" title="Undo (←)" disabled={!line.cursor} onClick={() => navigate(line.cursor - 1)}><Icon name="left"/></button><span className="ply-counter">{line.cursor}<span> / {line.moves.length}</span></span><button className="icon-button" aria-label="Redo move" title="Redo (→)" disabled={line.cursor === line.moves.length} onClick={() => navigate(line.cursor + 1)}><Icon name="right"/></button><button className="icon-button" aria-label="Last position" title="Last position (End)" disabled={line.cursor === line.moves.length} onClick={() => navigate(line.moves.length)}><Icon name="last"/></button></div>
           </div>
+          <label className="arrow-toggle board-arrow-toggle">
+            <input type="checkbox" checked={arrows} onChange={event => {
+              const visible = event.target.checked;
+              setArrows(visible);
+              try { localStorage.setItem(arrowPreference, String(visible)); }
+              catch { /* Keep the choice for this page if storage is unavailable. */ }
+            }}/>Show best-move arrows
+          </label>
           <p className="board-hint">Drag a piece or select two squares. <kbd>←</kbd> <kbd>→</kbd> to explore your line.</p>
         </section>
 
@@ -196,7 +209,6 @@ export default function App() {
                   engine.invalidate();
                   setMultipv(event.target.value === '3' ? 3 : 1);
                 }}><option value={1}>1 line</option><option value={3}>3 lines</option></select></label>
-                <label className="arrow-toggle"><input type="checkbox" checked={arrows} onChange={event => setArrows(event.target.checked)}/>Show arrows</label>
               </div>
               {multipv === 3 && <p className="candidate-note">MultiPV 3 shares the search budget across candidates and can reduce search strength per line.</p>}
               <div className="section-label candidate-heading">CANDIDATE MOVES<span>{result?.done ? 'SEARCH COMPLETE' : engine.running ? 'LATEST COMPLETE DEPTH' : result ? 'STOPPED' : ''}</span></div>
@@ -211,7 +223,7 @@ export default function App() {
                     <span className="muted">Depth {candidate.depth}</span>
                     {candidate.rank === 1 && <button className="text-button ml-auto" onClick={() => best && attemptMove(best.slice(0, 2), best.slice(2, 4), best[4])}>Play move</button>}
                   </div>
-                  {arrows && route && route.ranks.length > 1 && <small className="candidate-note">
+                  {route && route.ranks.length > 1 && <small className="candidate-note">
                     {sharedRank === candidate.rank ? `Arrow shared by ranks ${route.ranks.map(rank => `#${rank}`).join(', ')}.` : `Uses arrow #${sharedRank}.`}
                   </small>}
                   <Variation moves={candidate.pv} testId={candidate.rank === 1 ? 'principal-variation' : undefined}/>
