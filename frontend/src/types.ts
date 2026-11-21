@@ -1,0 +1,12 @@
+export type Mode = 'fast' | 'strong' | 'deep';
+export type Score = { cp: number | null; mate: number | null; winner: 'white' | 'black' | null;
+  stm_cp: number | null; stm_mate: number | null; bound: 'lower' | 'upper' | null };
+export type PVMove = { uci: string; san: string; number: number; color: 'white' | 'black' };
+export type CandidateCount = 1 | 3;
+export type Candidate = { rank: number; score: Score;
+  pv: PVMove[]; best_move: string | null; depth: number; nodes: number; nps: number;
+  time: number };
+export type Analysis = Omit<Candidate, 'rank'> & { type: 'analysis'; request_id: string; fen: string;
+  multipv: CandidateCount; candidates: Candidate[]; done: boolean; terminal?: string };
+export type PositionRequest = { root_fen: string; moves: string[]; mode: Mode;
+  multipv: CandidateCount; legalMoves: number; fen: string; key: string };
