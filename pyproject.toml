@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["engine: requires the real native Stockfish 19 executable"]
