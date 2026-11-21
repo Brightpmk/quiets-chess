@@ -8,7 +8,7 @@ import time
 import chess
 import chess.engine
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from .engine import EngineManager
 from .latest import LatestJob
-from .protocol import AnalyzeRequest, MODES, info_payload, terminal_score
+from .protocol import AnalyzeRequest, MODES, PositionValidationRequest, info_payload, terminal_score
 from .review import ReviewAnalyzer
 from .review_jobs import ReviewJobs, review_routes
 from .search import Iterations
@@ -55,6 +55,17 @@ def create_app(settings=None, manager=None):
         return {"ready": manager.protocol is not None, "engine": manager.name,
                 "error": manager.error, "threads": settings.threads, "hash_mb": settings.hash_mb,
                 "multipv": [1, 3], "limit_strength": False}
+
+    @app.post("/api/positions/validate")
+    async def validate_position(payload: PositionValidationRequest, request: Request):
+        origin = request.headers.get("origin")
+        if origin is not None and origin not in settings.origins:
+            raise HTTPException(403, "Local origin required.")
+        try:
+            board = payload.board()
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"fen": board.fen(en_passant="fen")}
 
     @app.websocket("/ws/analysis")
     async def websocket(ws: WebSocket):

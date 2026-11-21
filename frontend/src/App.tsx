@@ -10,6 +10,7 @@ import type { CandidateCount, Mode } from './types.ts';
 import { candidateArrows, candidateColors } from './candidates.ts';
 import { boardAppearance, download, Variation } from './chessDisplay.tsx';
 import { GameReview } from './GameReview.tsx';
+import { PositionEditor } from './PositionEditor.tsx';
 
 const arrowPreference = 'quiet-chess.show-best-move-arrows';
 
@@ -31,6 +32,8 @@ function Icon({name, size = 18}: {name: string; size?: number}) {
 export default function App() {
   const [workflow, setWorkflow] = useState<'analysis' | 'review'>('analysis');
   const [line, setLine] = useState<Line>(initialLine);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [rootRevision, setRootRevision] = useState(0);
   const [mode, setMode] = useState<Mode>('fast');
   const [multipv, setMultipv] = useState<CandidateCount>(1);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
@@ -53,8 +56,8 @@ export default function App() {
   const history = useMemo(() => moveList(line), [line]);
   const legalMoves = useMemo(() => game.moves().length, [game]);
   const fen = game.fen();
-  const key = JSON.stringify([line.root, line.moves.slice(0, line.cursor), mode, multipv]);
-  const engine = useAnalysis({root_fen: line.root, moves: line.moves.slice(0, line.cursor), fen, mode, multipv, legalMoves, key}, workflow === 'analysis');
+  const key = JSON.stringify([line.root, line.moves.slice(0, line.cursor), mode, multipv, rootRevision]);
+  const engine = useAnalysis({root_fen: line.root, moves: line.moves.slice(0, line.cursor), fen, mode, multipv, legalMoves, key}, workflow === 'analysis', editorOpen);
   const result = engine.result;
   const candidates = result?.candidates ?? [];
   const routes = candidateArrows(candidates);
@@ -117,7 +120,7 @@ export default function App() {
     if (confirmNew) resetDialog.current?.showModal(); else resetDialog.current?.close();
   }, [confirmNew]);
   useEffect(() => {
-    if (workflow !== 'analysis') return;
+    if (workflow !== 'analysis' || editorOpen) return;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (target.closest('input, textarea, select, dialog') || target.isContentEditable || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -157,7 +160,10 @@ export default function App() {
     <GameReview visible={workflow === 'review'} onOpenPosition={next => { change(next); setWorkflow('analysis'); }}/>
     <main className="workspace" hidden={workflow !== 'analysis'}>
       <div className="page-heading"><div><div className="eyebrow">YOUR NEXT MOVE, UNDERSTOOD</div><h1>Analysis board</h1></div>
-        <button className="button secondary" onClick={() => line.moves.length ? setConfirmNew(true) : reset()}><Icon name="plus"/>New board</button>
+        <div className="board-heading-actions">
+          <button className="button secondary" onClick={() => setEditorOpen(true)}>Set up position</button>
+          <button className="button secondary" onClick={() => line.moves.length ? setConfirmNew(true) : reset()}><Icon name="plus"/>New board</button>
+        </div>
       </div>
       <div className="analysis-grid">
         <section className="board-column" aria-label="Chess board and navigation">
@@ -255,6 +261,13 @@ export default function App() {
       </section>
       <footer className="site-footer"><span>Just you, the board, and the next move.</span><span>{engine.info ? `${engine.info.threads} threads · ${engine.info.hash_mb} MB hash · MultiPV ${multipv}` : 'Local analysis · No account required'}</span></footer>
     </main>
+    {editorOpen && <PositionEditor fen={line.cursor ? fen : line.root} orientation={orientation}
+      onCancel={() => setEditorOpen(false)} onApply={root => {
+        change({root, moves: [], cursor: 0, headers: {}});
+        setRootRevision(value => value + 1);
+        setEditorOpen(false);
+        setNotice('Position applied');
+      }}/>}
     <div className={`toast ${notice ? 'visible' : ''}`} role="status">{notice}</div>
     <dialog ref={promotionDialog} onCancel={() => setPromotion(null)} className="modal"><h2>Promote your pawn</h2><p>Choose a piece for {promotion?.to}.</p><div className="promotion-options">{[['q', 'Queen', '♛'], ['r', 'Rook', '♜'], ['b', 'Bishop', '♝'], ['n', 'Knight', '♞']].map(([piece, label, symbol]) => <button key={piece} aria-label={`Promote to ${label}`} onClick={() => promotion && attemptMove(promotion.from, promotion.to, piece)}><span>{symbol}</span>{label}</button>)}</div><button className="button ghost" onClick={() => setPromotion(null)}>Cancel</button></dialog>
     <dialog ref={resetDialog} onCancel={() => setConfirmNew(false)} className="modal"><h2>Start a new board?</h2><p>This replaces your current line. Export PGN first if you want to keep it.</p><div className="flex gap-3 mt-5"><button className="button secondary" onClick={() => setConfirmNew(false)}>Keep analyzing</button><button className="button primary" onClick={reset}>New board</button></div></dialog>

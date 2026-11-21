@@ -5,7 +5,7 @@ import type { Analysis, PositionRequest } from './types.ts';
 type Connection = 'connecting' | 'connected' | 'disconnected' | 'busy';
 type EngineInfo = { engine: string | null; threads: number; hash_mb: number };
 
-export function useAnalysis(position: PositionRequest, enabled: boolean) {
+export function useAnalysis(position: PositionRequest, enabled: boolean, suspended = false) {
   const desired = useRef(position);
   const socket = useRef<WebSocket | null>(null);
   const activeId = useRef<string | null>(null);
@@ -18,31 +18,56 @@ export function useAnalysis(position: PositionRequest, enabled: boolean) {
   const [reconnect, setReconnect] = useState(0);
   const paused = useRef(false);
   const enabledRef = useRef(enabled);
+  const suspendedRef = useRef(suspended);
+  const searchRunning = useRef(false);
+  const resumeAfterEdit = useRef(false);
+
+  const markRunning = useCallback((value: boolean) => {
+    searchRunning.current = value;
+    setRunning(value);
+  }, []);
 
   const launch = useCallback(() => {
     const ws = socket.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || paused.current || !enabledRef.current) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || paused.current || suspendedRef.current || !enabledRef.current) return;
     const requestId = `${Date.now()}-${++sequence.current}`;
     activeId.current = requestId;
-    setResult(null); setError(''); setRunning(true);
+    setResult(null); setError(''); markRunning(true);
     const { root_fen, moves, mode, multipv } = desired.current;
     ws.send(JSON.stringify({type: 'analyze', request_id: requestId, root_fen, moves, mode, multipv}));
-  }, []);
+  }, [markRunning]);
 
-  const invalidate = useCallback(() => {
+  const halt = useCallback(() => {
     activeId.current = null; // Synchronous, before React commits the new position.
-    setResult(null); setRunning(false); setError('');
+    markRunning(false);
     if (socket.current?.readyState === WebSocket.OPEN)
       socket.current.send(JSON.stringify({type: 'stop'}));
-  }, []);
+  }, [markRunning]);
+
+  const invalidate = useCallback(() => {
+    halt();
+    setResult(null); setError('');
+  }, [halt]);
 
   useLayoutEffect(() => {
+    const changed = desired.current.key !== position.key || enabledRef.current !== enabled;
+    const wasSuspended = suspendedRef.current;
     desired.current = position;
     enabledRef.current = enabled;
-    paused.current = false;
-    invalidate();
-    launch();
-  }, [position.key, enabled, invalidate, launch]);
+    suspendedRef.current = suspended;
+    if (changed) {
+      paused.current = false;
+      resumeAfterEdit.current = false;
+      invalidate();
+      launch();
+    } else if (suspended && !wasSuspended) {
+      resumeAfterEdit.current = searchRunning.current;
+      if (searchRunning.current) halt();
+    } else if (!suspended && wasSuspended && resumeAfterEdit.current) {
+      resumeAfterEdit.current = false;
+      launch();
+    }
+  }, [position.key, enabled, suspended, invalidate, halt, launch]);
 
   useEffect(() => {
     let disposed = false;
@@ -57,7 +82,10 @@ export function useAnalysis(position: PositionRequest, enabled: boolean) {
       socket.current = ws;
       ws.onopen = () => {
         if (disposed) { ws.close(); return; }
-        attempt = 0; setConnection('connected'); launch();
+        attempt = 0;
+        setConnection('connected');
+        if (suspendedRef.current && !paused.current) resumeAfterEdit.current = true;
+        launch();
       };
       ws.onmessage = event => {
         if (disposed || socket.current !== ws) return;
@@ -65,7 +93,7 @@ export function useAnalysis(position: PositionRequest, enabled: boolean) {
         try { message = JSON.parse(event.data); } catch { return; }
         if (message.type === 'hello') { setInfo(message); return; }
         if (message.code === 'busy') {
-          busy = true; setConnection('busy'); setError(message.message); setRunning(false); return;
+          busy = true; setConnection('busy'); setError(message.message); markRunning(false); return;
         }
         const id = activeId.current;
         const expected = desired.current;
@@ -77,14 +105,14 @@ export function useAnalysis(position: PositionRequest, enabled: boolean) {
             return acceptsAnalysis(id, expected.fen, expected.multipv, expected.legalMoves, message, previous)
               ? {...message, ...message.candidates[0], key: expected.key} : previous;
           });
-          if (message.done) setRunning(false);
+          if (message.done) markRunning(false);
         }
-        if (message.type === 'complete') setRunning(false);
-        if (message.type === 'error') { setError(message.message); setRunning(false); setResult(null); }
+        if (message.type === 'complete') markRunning(false);
+        if (message.type === 'error') { setError(message.message); markRunning(false); setResult(null); }
       };
       ws.onclose = () => {
         if (disposed || socket.current !== ws) return;
-        activeId.current = null; setRunning(false); setResult(null);
+        activeId.current = null; markRunning(false); setResult(null);
         if (!busy) {
           setConnection('disconnected');
           setError('Analysis server disconnected. Start the backend; reconnecting automatically.');
@@ -100,14 +128,13 @@ export function useAnalysis(position: PositionRequest, enabled: boolean) {
       if (ws?.readyState === WebSocket.CONNECTING) ws.onopen = () => ws.close();
       else ws?.close();
     };
-  }, [reconnect, launch]);
+  }, [reconnect, launch, markRunning]);
 
   return {
     connection, info, error, running,
     result: enabled && result?.key === position.key ? result : null,
     invalidate,
-    stop: () => { paused.current = true; activeId.current = null; setRunning(false);
-      if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({type: 'stop'})); },
+    stop: () => { paused.current = true; halt(); },
     retry: () => { paused.current = false;
       if (connection === 'connected') launch(); else setReconnect(n => n + 1); },
   };

@@ -45,8 +45,9 @@ engine on the running event loop. Keep the server bound to loopback.
   retains the current completed iteration. **Analyze** starts again.
 - Set **Candidate lines** to **3 lines** for native MultiPV 3 or **1 line**
   for MultiPV 1. The rank badges match the board arrow colors. Each row shows
-  SAN, White-relative evaluation, depth and principal variation. **Show arrows**
-  controls the board overlay. Promotions with the same source and destination
+  SAN, White-relative evaluation, depth and principal variation. **Show
+  best-move arrows** below the board hides only the overlay and remembers your
+  choice in this browser. Promotions with the same source and destination
   share the highest-ranked arrow on that route and retain their own SAN and rank.
 - The evaluation bar follows candidate #1. It uses a visual score scale.
   **Play move** applies that candidate, including its promotion piece.
@@ -59,6 +60,20 @@ engine on the running event loop. Keep the server bound to loopback.
   and **PGN** export through the selected position. The board accepts one
   game at a time, up to 100 KB and 2,000 plies. PGN import keeps the mainline
   and headers. Export your work before closing or refreshing.
+
+### Set up a position
+
+Click **Set up position** to edit a draft of the displayed board, even at an
+earlier move. Drag pieces or select **Move pieces** and tap two squares. Use the
+palette to place a piece, or choose **Remove piece** and tap a square. **Clear
+board** empties the draft, and **Starting position** restores the standard setup.
+
+Choose the side to move, castling rights, en passant target and move counters.
+**Draft FEN** displays the current draft for copying. **Apply position** runs
+local and backend validation and starts analysis from a new root. Export its
+PGN to save the custom starting FEN. **Cancel** preserves the original line
+and resumes analysis if it was running. Position checks cover standard chess
+rules and cannot establish the full move history.
 
 ## Game Review
 

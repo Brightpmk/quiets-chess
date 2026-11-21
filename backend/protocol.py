@@ -6,6 +6,49 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MODES = {"fast": 1.0, "strong": 3.0, "deep": 10.0}
 
+POSITION_ERRORS = (
+    (chess.STATUS_NO_WHITE_KING, "Add a white king."),
+    (chess.STATUS_NO_BLACK_KING, "Add a black king."),
+    (chess.STATUS_TOO_MANY_KINGS, "Use exactly one king per color."),
+    (chess.STATUS_PAWNS_ON_BACKRANK, "Pawns cannot be on ranks 1 or 8."),
+    (chess.STATUS_TOO_MANY_WHITE_PAWNS | chess.STATUS_TOO_MANY_BLACK_PAWNS, "Use at most eight pawns per color."),
+    (chess.STATUS_TOO_MANY_WHITE_PIECES | chess.STATUS_TOO_MANY_BLACK_PIECES, "Use at most sixteen pieces per color."),
+    (chess.STATUS_BAD_CASTLING_RIGHTS, "Castling requires the king and the corresponding rook on their starting squares."),
+    (chess.STATUS_INVALID_EP_SQUARE, "The en passant target must match a pawn that just advanced two squares."),
+    (chess.STATUS_OPPOSITE_CHECK, "The side that just moved cannot be in check."),
+    (chess.STATUS_TOO_MANY_CHECKERS | chess.STATUS_IMPOSSIBLE_CHECK, "The checking pieces are inconsistent with a legal last move."),
+)
+
+
+def position_board(fen):
+    board = chess.Board(fen)
+    status = board.status()
+    if status != chess.STATUS_VALID:
+        white, black = board.king(chess.WHITE), board.king(chess.BLACK)
+        if white is not None and black is not None and chess.square_distance(white, black) == 1:
+            raise ValueError("The kings cannot be adjacent.")
+        for flag, message in POSITION_ERRORS:
+            if status & flag:
+                raise ValueError(message)
+        raise ValueError("FEN is not a valid standard-chess position.")
+    return board
+
+
+class PositionValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    fen: str = Field(min_length=15, max_length=120)
+
+    def board(self) -> chess.Board:
+        fields = self.fen.split()
+        if len(fields) != 6 or not re.fullmatch(r"-|(?=[KQkq])K?Q?k?q?", fields[2]):
+            raise ValueError("Enter six FEN fields with standard castling rights.")
+        if not re.fullmatch(r"[0-9]+", fields[4]) or not re.fullmatch(r"[1-9][0-9]*", fields[5]):
+            raise ValueError("Use a nonnegative halfmove clock and a positive fullmove number.")
+        board = position_board(self.fen)
+        if board.ep_square is not None and board.halfmove_clock != 0:
+            raise ValueError("The halfmove clock must be zero after the pawn move that sets an en passant target.")
+        return board
+
 
 class AnalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -17,9 +60,7 @@ class AnalyzeRequest(BaseModel):
     multipv: Literal[1, 3] = 1
 
     def board(self) -> chess.Board:
-        board = chess.Board(self.root_fen)
-        if not board.is_valid():
-            raise ValueError("FEN is not a valid standard-chess position")
+        board = position_board(self.root_fen)
         for uci in self.moves:
             if not re.fullmatch(r"[a-h][1-8][a-h][1-8][qrbn]?", uci):
                 raise ValueError(f"Invalid UCI move: {uci[:12]}")

@@ -129,3 +129,32 @@ def test_three_candidates_complete_as_a_batch_and_switch_to_one_at_same_fen():
                 if result['request_id'] == 'forced':
                     assert [line['pv'][0]['san'] for line in result['candidates']] == ['Kxg7']
                     break
+
+
+@pytest.mark.parametrize(('fen', 'error'), [
+    ('8/8/8/8/8/8/8/8 w - - 0 1', 'white king'),
+    ('4k3/8/8/8/8/8/8/3KK3 w - - 0 1', 'exactly one king'),
+    ('8/8/8/8/8/8/4k3/4K3 w - - 0 1', 'adjacent'),
+    ('4k3/8/8/8/8/8/8/P3K3 w - - 0 1', 'ranks 1 or 8'),
+    ('4k3/8/8/8/8/8/8/4K3 w K - 0 1', 'Castling requires'),
+    ('4k3/8/8/3p4/8/8/8/4K3 b - d6 0 31', 'en passant'),
+    ('4k3/8/8/3p4/8/8/8/4K3 w - d6 1 31', 'halfmove clock'),
+    ('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1', 'side that just moved'),
+])
+def test_editor_rejects_invalid_positions_without_search(fen, error):
+    manager = SimulatedManager()
+    with TestClient(create_app(SETTINGS, manager)) as client:
+        response = client.post('/api/positions/validate', json={'fen': fen}, headers=ORIGIN)
+        assert response.status_code == 422
+        assert error in response.json()['detail']
+    assert not manager.events
+
+
+def test_editor_keeps_castling_and_fen_en_passant_target():
+    manager = SimulatedManager()
+    fen = 'r3k2r/8/8/3p4/8/8/8/R3K2R w KQkq d6 0 31'
+    with TestClient(create_app(SETTINGS, manager)) as client:
+        response = client.post('/api/positions/validate', json={'fen': fen}, headers=ORIGIN)
+        assert response.status_code == 200
+        assert response.json() == {'fen': fen}
+    assert not manager.events

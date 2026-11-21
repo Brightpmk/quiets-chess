@@ -35,8 +35,32 @@
 }
 .candidate-controls {justify-content: space-between; flex-wrap: wrap;}
 .candidate-controls label, .review-actions label {color: #b7c4af; font-size: 12px;}
-.candidate-controls .arrow-toggle {margin: 0;}
 .board-arrow-toggle {margin: 8px 0 0 27px; min-height: 32px; width: fit-content; font-size: 12px;}
+.board-heading-actions {display: flex; flex-wrap: wrap; gap: 8px;}
+.position-editor {max-width: 880px; max-height: calc(100dvh - 24px); overflow: auto;}
+.editor-layout {display: grid; grid-template-columns: minmax(0, 1fr) minmax(225px, .68fr); gap: 20px; align-items: start; margin-top: 14px;}
+.editor-settings {min-width: 0; display: grid; gap: 10px;}
+.editor-tools, .editor-footer {display: flex; flex-wrap: wrap; gap: 6px;}
+.editor-palette {display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px;}
+.editor-palette button {min-height: 38px; border: 1px solid #4a5945; background: #171d17; border-radius: 4px; color: #f1f3e8; font-size: 21px; line-height: 1;}
+.editor-palette button[aria-pressed="true"], .editor-tools button[aria-pressed="true"] {border-color: #b6cc9b; background: #394832;}
+.editor-settings label, .editor-fen {display: grid; gap: 4px; font-size: 12px;}
+.editor-settings select, .editor-settings input[type="number"], .editor-fen input {width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #4a5945; background: #171d17; border-radius: 4px;}
+.editor-settings input[type="checkbox"], .board-arrow-toggle input {accent-color: #bad894;}
+.editor-castling, .editor-counters {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px;}
+.editor-castling legend {margin: 0 0 4px; font-size: 12px;}
+.editor-castling label {display: flex; align-items: center; gap: 6px;}
+.editor-fen {margin-top: 14px;}
+.editor-fen input {font-family: ui-monospace, monospace;}
+.editor-footer {margin-top: 12px;}
+.position-editor .editor-error {color: #ffbaaa;}
+
+@media (max-width: 620px) {
+  .position-editor {padding: 14px;}
+  .editor-layout {grid-template-columns: minmax(0, 1fr);}
+  .board-heading-actions .button {min-height: 34px; padding: 6px 9px;}
+  .page-heading:has(.board-heading-actions) {flex-wrap: wrap; gap: 10px;}
+}
 .candidate-controls select, .review-actions select {
   min-height: 32px;
   padding: 4px 8px;

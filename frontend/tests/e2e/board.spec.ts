@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function square(page: Page, name: string) {
   return page.getByTestId('chessboard').locator(`[data-square="${name}"]`).first();
@@ -67,4 +68,80 @@ test('live native engine streams a PV after position changes', async ({page}) =>
   await expect(page.getByTestId('position-status')).toHaveText('Black to move');
   await expect(page.getByTestId('principal-variation')).toBeVisible({timeout: 10000});
   await expect(page.getByTestId('evaluation')).not.toHaveText('—');
+});
+
+test('edits an earlier position independently and validates a new custom root', async ({page}) => {
+  test.skip(process.env.RUN_STOCKFISH_TESTS !== '1', 'Requires running backend with Stockfish 19');
+  await page.setViewportSize({width: 390, height: 844});
+  const packets: {type: string; root_fen?: string; moves?: string[]}[] = [];
+  page.on('websocket', ws => ws.on('framesent', ({payload}) => packets.push(JSON.parse(payload.toString()))));
+  await page.goto('/');
+  await page.locator('.import-tabs').getByRole('button', {name: 'PGN'}).click();
+  await page.getByLabel('PGN to import').fill('1. e4 e5 *');
+  await page.getByRole('button', {name: 'Load PGN'}).click();
+  await page.getByRole('button', {name: 'Undo move'}).click();
+  await page.getByRole('button', {name: 'Deep 10 seconds'}).click();
+  await expect(page.getByRole('button', {name: 'Stop', exact: true})).toBeVisible();
+  const openEditor = page.getByRole('button', {name: 'Set up position'});
+  const editor = page.getByRole('dialog', {name: 'Set up position'});
+  const draft = editor.getByLabel('Draft FEN');
+  await openEditor.click();
+  await expect(draft).toHaveValue(/4P3.* b KQkq - 0 1$/);
+  await expect.poll(() => packets.at(-1)?.type).toBe('stop');
+  const requestsBeforeEdits = packets.filter(packet => packet.type === 'analyze').length;
+  await editor.getByRole('button', {name: 'Clear board'}).click();
+  await editor.getByRole('button', {name: 'Apply position'}).click();
+  await expect(editor.getByRole('alert')).toHaveText(/missing white king/);
+  expect(packets.filter(packet => packet.type === 'analyze')).toHaveLength(requestsBeforeEdits);
+  await editor.getByRole('button', {name: 'Starting position'}).click();
+  await expect(draft).toHaveValue(/ w KQkq - 0 1$/);
+  await editor.getByRole('button', {name: 'Cancel', exact: true}).click();
+  await expect(page.getByTestId('position-status')).toHaveText('Black to move');
+  await expect(page.getByRole('button', {name: 'Redo move'})).toBeEnabled();
+  await expect.poll(() => packets.at(-1)?.moves).toEqual(['e2e4']);
+
+  await openEditor.click();
+  await editor.getByRole('button', {name: 'Clear board'}).click();
+  const choose = (name: string) => editor.getByRole('button', {name, exact: true}).click();
+  const tap = (square: string) => editor.getByTestId('editor-board').locator(`[data-square="${square}"]`).click();
+  await choose('White King'); await tap('e1');
+  await choose('Black King'); await tap('e8');
+  await choose('White Rook'); await tap('a3');
+  await choose('Move pieces'); await tap('a3'); await tap('h1');
+  await choose('Remove piece'); await tap('h1');
+  await choose('White Rook'); await tap('h1');
+  await choose('Black Pawn'); await tap('d5');
+  await choose('White Pawn'); await tap('e5');
+  await editor.getByLabel('White kingside').check();
+  await editor.getByLabel('Side to move').selectOption('w');
+  await editor.getByLabel('En passant target').selectOption('d6');
+  await editor.getByLabel('Fullmove number').fill('31');
+  const root = '4k3/8/8/3pP3/8/8/8/4K2R w K d6 0 31';
+  await expect(draft).toHaveValue(root);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await editor.getByRole('button', {name: 'Copy FEN'}).click();
+  await expect(editor.getByText('FEN copied.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(root);
+  await editor.getByRole('button', {name: 'Apply position'}).click();
+  await expect(editor).toBeHidden();
+  await expect(page.getByTestId('position-status')).toHaveText('White to move');
+  await expect(page.getByRole('button', {name: 'Redo move'})).toBeDisabled();
+  await expect(page.getByTestId('move-list')).not.toContainText('e4');
+  await expect.poll(() => packets.at(-1)).toMatchObject({type: 'analyze', root_fen: root, moves: []});
+  await expect(page.getByTestId('principal-variation')).toBeVisible();
+  const downloaded = page.waitForEvent('download');
+  await page.locator('.export-buttons').getByRole('button', {name: 'PGN', exact: true}).click();
+  expect(await readFile(await (await downloaded).path(), 'utf8')).toContain(`[FEN "${root}"]`);
+
+  await page.getByRole('button', {name: 'Stop', exact: true}).click();
+  const count = packets.filter(packet => packet.type === 'analyze').length;
+  await openEditor.click();
+  await editor.getByRole('button', {name: 'Cancel', exact: true}).click();
+  await expect(page.getByRole('button', {name: 'Analyze', exact: true})).toBeVisible();
+  await expect(page.getByTestId('principal-variation')).toBeVisible();
+  expect(packets.filter(packet => packet.type === 'analyze')).toHaveLength(count);
+  await openEditor.click();
+  await editor.getByRole('button', {name: 'Apply position'}).click();
+  await expect(editor).toBeHidden();
+  await expect.poll(() => packets.filter(packet => packet.type === 'analyze')).toHaveLength(count + 1);
 });
